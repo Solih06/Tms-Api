@@ -1,0 +1,4 @@
+The request will pass through the middleware pipeline, 
+successfully match the endpoint defined in MapGet, and 
+return a 200 OK status code because no authorization check is currently 
+enforced on the endpoint.
