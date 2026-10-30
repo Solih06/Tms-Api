@@ -78,4 +78,46 @@ public class RegistrarController(TmsDbContext context) : ControllerBase
 
         return Ok(list);
     }
+
+// 1. Paged list of students (Page size 20, stable sort required)
+    [HttpGet("students/paged")]
+    public async Task<IActionResult> GetPagedStudents(
+        [FromQuery] int page = 1, 
+        [FromQuery] int pageSize = 20, 
+        CancellationToken cancellationToken = default)
+    {
+        if (page < 1) page = 1;
+        if (pageSize < 1) pageSize = 20;
+
+        var students = await context.Students
+            .OrderBy(s => s.Name) // CRITICAL: Always OrderBy before Skip/Take for stable sorting
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return Ok(new
+        {
+            CurrentPage = page,
+            PageSize = pageSize,
+            Students = students
+        });
+    }
+
+    // 2. Top 5 courses by enrollment count using GroupBy and aggregates
+    [HttpGet("courses/top-enrollments")]
+    public async Task<IActionResult> GetTopCoursesByEnrollment(CancellationToken cancellationToken = default)
+    {
+        var topCourses = await context.Enrollments
+            .GroupBy(e => e.Course.Title)
+            .Select(g => new
+            {
+                CourseTitle = g.Key,
+                EnrollmentCount = g.Count()
+            })
+            .OrderByDescending(x => x.EnrollmentCount)
+            .Take(5)
+            .ToListAsync(cancellationToken);
+
+        return Ok(topCourses);
+    }
 }

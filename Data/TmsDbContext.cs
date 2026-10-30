@@ -8,4 +8,12 @@ public DbSet<Course> Courses => Set<Course>();
 public DbSet<Enrollment> Enrollments => Set<Enrollment>();
 public DbSet<Assessment> Assessments => Set<Assessment>();
 public DbSet<Certificate> Certificates => Set<Certificate>();
-}
+
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+        
+        // Automatically discovers and applies all IEntityTypeConfiguration classes in the assembly
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(TmsDbContext).Assembly);
+    }
+} 
