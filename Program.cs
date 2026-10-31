@@ -3,6 +3,13 @@ using Microsoft.EntityFrameworkCore;
 using TmsApi.Data;
 using TmsApi.Entities;
 using TmsApi.Services;
+using Asp.Versioning;
+using Asp.Versioning.ApiExplorer;
+using TmsApi.Application.Behaviors;
+using TmsApi.Application.Enrollments.Commands;
+using FluentValidation;
+using MediatR;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,7 +35,23 @@ builder.Services.AddDbContext<TmsDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("TmsDatabase"))
            .LogTo(Console.WriteLine, LogLevel.Information)
            .EnableSensitiveDataLogging());
-
+builder.Services.AddApiVersioning(options =>
+{
+    options.DefaultApiVersion = new ApiVersion(1, 0);
+    options.AssumeDefaultVersionWhenUnspecified = true;
+    options.ReportApiVersions = true;
+    options.ApiVersionReader = new UrlSegmentApiVersionReader();
+})
+.AddMvc()
+.AddApiExplorer(options =>
+{
+    options.GroupNameFormat = "'v'VVV";
+    options.SubstituteApiVersionInUrl = true;
+});
+builder.Services.AddMediatR(cfg =>
+    cfg.RegisterServicesFromAssembly(typeof(EnrollStudentHandler).Assembly));
+builder.Services.AddValidatorsFromAssembly(typeof(EnrollStudentValidator).Assembly);
+builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
 
 
 builder.Services.AddOptions<PaymentOptions>()
@@ -45,7 +68,8 @@ builder.Services.AddOptions<PaymentOptions>()
         return opt.MaxDepositBirr % 100 == 0;
     }, "MaxDepositBirr must be divisible by 100")
     .ValidateOnStart();
-
+builder.Services.AddHybridCache();
+builder.Services.AddScoped<ICachedCourseService, CachedCourseService>();
 var app = builder.Build();
 
 // Seed test data at startup
@@ -87,6 +111,7 @@ using (var scope = app.Services.CreateScope())
         context.SaveChanges();
     }
 }
+
 
 // 1. Logging Middleware (Outer wrapper)
 app.UseMiddleware<RequestLoggingMiddleware>();

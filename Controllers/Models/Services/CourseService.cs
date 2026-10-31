@@ -10,12 +10,12 @@ public interface ICourseService
     Task<CourseResponseDto?> GetByIdAsync(int id, CancellationToken ct);
     Task<CourseResponseDto?> FindByCodeAsync(string code, CancellationToken ct);
     Task<CourseResponseDto> CreateAsync(CreateCourseRequest request, CancellationToken ct);
-    
-    // Add this line for Exercise 4:
     Task<PagedResponse<CourseResponseDto>> GetCoursesAsync(PagedRequest request, CancellationToken ct);
 }
 
-public class CourseService(TmsDbContext context) : ICourseService
+public class CourseService(
+    TmsDbContext context,
+    ICachedCourseService cachedCourseService) : ICourseService // Inject ICachedCourseService here
 {
     public async Task<CourseResponseDto?> GetByIdAsync(int id, CancellationToken ct)
     {
@@ -55,6 +55,9 @@ public class CourseService(TmsDbContext context) : ICourseService
         context.Courses.Add(course);
         await context.SaveChangesAsync(ct);
 
+        // Invalidate the course cache whenever a new course is created!
+        await cachedCourseService.InvalidateCourseCacheAsync(ct);
+
         return new CourseResponseDto(
             course.Id,
             course.Title,
@@ -63,7 +66,6 @@ public class CourseService(TmsDbContext context) : ICourseService
             0);
     }
 
-    // Add this implementation method for Exercise 4:
     public async Task<PagedResponse<CourseResponseDto>> GetCoursesAsync(PagedRequest request, CancellationToken ct)
     {
         var query = context.Courses.AsNoTracking().AsQueryable();
