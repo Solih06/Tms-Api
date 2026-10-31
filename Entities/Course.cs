@@ -6,5 +6,6 @@ public required string Code { get; set; } // natural key — human-readable (uni
 public required string Title { get; set; }
 public int Capacity { get; set; }
 // Navigation property for many-to-many relationship
+public int MaxCapacity { get; set; }
 public ICollection<Enrollment> Enrollments { get; set; } = new List<Enrollment>();
 }

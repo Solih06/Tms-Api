@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TmsApi.Data;
+using TmsApi.Entities;
 
 namespace TmsApi.Controllers;
 
@@ -79,7 +80,7 @@ public class RegistrarController(TmsDbContext context) : ControllerBase
         return Ok(list);
     }
 
-// 1. Paged list of students (Page size 20, stable sort required)
+    // 5. Paged list of students (Page size 20, stable sort required)
     [HttpGet("students/paged")]
     public async Task<IActionResult> GetPagedStudents(
         [FromQuery] int page = 1, 
@@ -103,7 +104,7 @@ public class RegistrarController(TmsDbContext context) : ControllerBase
         });
     }
 
-    // 2. Top 5 courses by enrollment count using GroupBy and aggregates
+    // 6. Top 5 courses by enrollment count using GroupBy and aggregates
     [HttpGet("courses/top-enrollments")]
     public async Task<IActionResult> GetTopCoursesByEnrollment(CancellationToken cancellationToken = default)
     {
@@ -119,5 +120,107 @@ public class RegistrarController(TmsDbContext context) : ControllerBase
             .ToListAsync(cancellationToken);
 
         return Ok(topCourses);
+    }
+
+    // Part A: Intentional N+1 Query (For learning/logging inspection)
+    [HttpGet("debug/n-plus-one")]
+    public async Task<IActionResult> TestNPlusOne(CancellationToken cancellationToken)
+    {
+        Console.WriteLine("\n>>> STARTING N+1 QUERY TEST...");
+        
+        var students = await context.Students
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+
+        var results = new List<string>();
+
+        foreach (var s in students)
+        {
+            var count = await context.Enrollments
+                .AsNoTracking()
+                .CountAsync(e => e.StudentId == s.Id, cancellationToken);
+                
+            results.Add($"{s.Name}: {count} enrollments");
+        }
+
+        Console.WriteLine(">>> END N+1 QUERY TEST.\n");
+        return Ok(results);
+    }
+
+    // Part B: Fixed with Shaped Query (Single round-trip with a SQL subquery)
+    [HttpGet("reports/shaped-enrollments")]
+    public async Task<IActionResult> GetShapedEnrollmentReport(CancellationToken cancellationToken)
+    {
+        Console.WriteLine("\n>>> STARTING SHAPED QUERY TEST...");
+
+        var report = await context.Students
+            .AsNoTracking()
+            .Select(s => new
+            {
+                s.Name,
+                EnrollmentCount = s.Enrollments.Count
+            })
+            .ToListAsync(cancellationToken);
+
+        Console.WriteLine(">>> END SHAPED QUERY TEST.\n");
+        return Ok(report);
+    }
+
+    // 7. Update Student with Shadow Property & Concurrency Check
+    [HttpPut("students/{id}")]
+    public async Task<IActionResult> UpdateStudent(int id, [FromBody] UpdateStudentDto dto, CancellationToken cancellationToken)
+    {
+        var student = await context.Students.FindAsync([id], cancellationToken);
+        if (student == null)
+        {
+            return NotFound();
+        }
+
+        student.Name = dto.Name;
+        student.GPA = dto.GPA; // Fixed casing and added missing semicolon
+
+        // UPDATE THE SHADOW PROPERTY HERE (Before saving changes)
+        context.Entry(student).Property("LastUpdated").CurrentValue = DateTime.UtcNow;
+
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict(new { message = "Concurrency conflict: This student record was modified by another user." });
+        }
+
+        return NoContent();
+    }
+
+    // DTO record for incoming update data
+    public record UpdateStudentDto(string Name, decimal GPA);
+
+    // 8. Bulk archive enrollments in a single set-based database operation
+    [HttpPost("enrollments/bulk-archive")]
+    public async Task<IActionResult> BulkArchiveEnrollments(CancellationToken cancellationToken)
+    {
+        int affectedRows = await context.Enrollments
+            .Where(e => !e.IsArchived)
+            .ExecuteUpdateAsync(s => s.SetProperty(e => e.IsArchived, true), cancellationToken);
+
+        return Ok(new
+        {
+            Message = "Bulk archive completed successfully.",
+            ArchivedEnrollmentsCount = affectedRows
+        });
+    }
+
+    // 9. Admin endpoint to view ALL students, including soft-deleted/archived ones
+    [HttpGet("admin/students/all")]
+    public async Task<IActionResult> GetAllStudentsIncludingArchived(CancellationToken cancellationToken)
+    {
+        var allStudents = await context.Students
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+
+        return Ok(allStudents);
     }
 }
