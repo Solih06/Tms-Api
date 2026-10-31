@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using TmsApi.Data;
 using TmsApi.Entities;
+using TmsApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,14 +19,17 @@ builder.Services.AddAuthentication().AddJwtBearer();
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
 
+// Register Services (Single registration for each)
+builder.Services.AddScoped<ICourseService, CourseService>();
+builder.Services.AddScoped<IEnrollmentService, EnrollmentService>();
+
 // Register TmsDbContext with console SQL logging and sensitive data enabled for development
 builder.Services.AddDbContext<TmsDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("TmsDatabase"))
            .LogTo(Console.WriteLine, LogLevel.Information)
            .EnableSensitiveDataLogging());
 
-builder.Services.AddSingleton<EnrollmentWorker>();
-builder.Services.AddScoped<IEnrollmentService, EnrollmentService>();
+
 
 builder.Services.AddOptions<PaymentOptions>()
     .BindConfiguration("Payments")
@@ -42,9 +46,7 @@ builder.Services.AddOptions<PaymentOptions>()
     }, "MaxDepositBirr must be divisible by 100")
     .ValidateOnStart();
 
-
 var app = builder.Build();
-
 
 // Seed test data at startup
 using (var scope = app.Services.CreateScope())
@@ -66,9 +68,9 @@ using (var scope = app.Services.CreateScope())
 
         var courses = new List<Course>
         {
-            new() { Code = "CS-101", Title = "Introduction to Computer Science", Capacity = 30 },
-            new() { Code = "CS-201", Title = "Data Structures and Algorithms", Capacity = 25 },
-            new() { Code = "MAT-101", Title = "Calculus I", Capacity = 40 }
+            new() { Code = "CS-101", Title = "Introduction to Computer Science", MaxCapacity = 30 },
+            new() { Code = "CS-201", Title = "Data Structures and Algorithms", MaxCapacity = 25 },
+            new() { Code = "MAT-101", Title = "Calculus I", MaxCapacity = 40 }
         };
         context.Courses.AddRange(courses);
         
@@ -86,7 +88,6 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-
 // 1. Logging Middleware (Outer wrapper)
 app.UseMiddleware<RequestLoggingMiddleware>();
 
@@ -99,30 +100,14 @@ app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
 
-// 4. Map GET /api/assessments/results with authorization required
+// 4. Map confidential assessments endpoint
 app.MapGet("/api/assessments/results", () => 
 {
     return Results.Ok(new { message = "This is the confidential data." });
 })
 .RequireAuthorization();
 
-// 5. Map POST /api/enrollments for enrollment creation
-app.MapPost("/api/enrollments", async (EnrollmentRequest request, IEnrollmentService service) =>
-{
-    var record = await service.EnrollAsync(request.StudentId, request.CourseCode);
-
-    // If this enrollment already existed, return 200 OK instead of 201 Created
-    if (service.GetAllAsync().Result.Any(e => e.StudentId == request.StudentId && e.CourseCode == request.CourseCode && e.Id == record.Id))
-    {
-        return Results.Ok(new { message = "Duplicate enrollment attempt", record });
-    }
-
-    return Results.Created($"/api/enrollments/{record.Id}", record);
-});
- app.MapControllers();
-
+// 5. Map all API controllers (CoursesController & EnrollmentsController handle their own routes)
+app.MapControllers();
 
 app.Run();
-
-// DTO for request body
-public record EnrollmentRequest(string StudentId, string CourseCode);
