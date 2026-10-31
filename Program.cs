@@ -16,6 +16,9 @@ using System.Threading.Channels;
 using TmsApi.Application.Transcripts;
 using TmsApi.Infrastructure.Workers;
 using TmsApi.Api.Hubs;
+using Polly;
+using Polly.Retry;
+using Polly.CircuitBreaker;
 
 
 
@@ -108,6 +111,40 @@ builder.Services.AddSingleton(Channel.CreateBounded<TranscriptRequest>(
     }));
     builder.Services.AddHostedService<TranscriptWorker>();
     builder.Services.AddSignalR();
+    builder.Services.AddResiliencePipeline("certificate-api", pipeline =>
+{
+    pipeline
+        .AddRetry(new RetryStrategyOptions
+        {
+            MaxRetryAttempts = 3,
+            Delay = TimeSpan.FromMilliseconds(500),
+            BackoffType = DelayBackoffType.Exponential,
+            UseJitter = true,
+            OnRetry = args =>
+            {
+                Console.WriteLine($"Retry #{args.AttemptNumber} after {args.RetryDelay.TotalMilliseconds}ms");
+                return ValueTask.CompletedTask;
+            }
+        })
+        .AddCircuitBreaker(new CircuitBreakerStrategyOptions
+        {
+            FailureRatio = 0.5,
+            MinimumThroughput = 10,
+            SamplingDuration = TimeSpan.FromSeconds(30),
+            BreakDuration = TimeSpan.FromSeconds(15),
+            OnOpened = _ =>
+            {
+                Console.WriteLine("Circuit OPENED — stopping requests to certificate service");
+                return ValueTask.CompletedTask;
+            },
+            OnClosed = _ =>
+            {
+                Console.WriteLine("Circuit CLOSED — certificate service recovered");
+                return ValueTask.CompletedTask;
+            }
+        })
+        .AddTimeout(TimeSpan.FromSeconds(5));
+});
 var app = builder.Build();
 app.MapHub<TmsHub>("/Hubs/tms");
 
