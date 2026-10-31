@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using TmsApi.Dtos;
 using TmsApi.Services;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace TmsApi.Controllers;
 
@@ -47,6 +48,14 @@ public class CoursesController(ICourseService courseService) : ControllerBase
 
         return Ok(detailDto);
     }
+[HttpGet("search")]
+[EnableRateLimiting("search")]
+public async Task<IActionResult> SearchCourses(
+    [FromQuery] string? term, CancellationToken ct)
+{
+    var results = await courseService.GetCoursesAsync(new PagedRequest { Page = 1, PageSize = 10, Search = term }, ct);
+    return Ok(results);
+}   
 
     [HttpPost]
     [ProducesResponseType(typeof(CourseResponseDto), StatusCodes.Status201Created)]

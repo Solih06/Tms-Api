@@ -9,6 +9,14 @@ using TmsApi.Application.Behaviors;
 using TmsApi.Application.Enrollments.Commands;
 using FluentValidation;
 using MediatR;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Mvc;
+using System.Threading.Channels;
+using TmsApi.Application.Transcripts;
+using TmsApi.Infrastructure.Workers;
+using TmsApi.Api.Hubs;
+
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -70,7 +78,38 @@ builder.Services.AddOptions<PaymentOptions>()
     .ValidateOnStart();
 builder.Services.AddHybridCache();
 builder.Services.AddScoped<ICachedCourseService, CachedCourseService>();
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddTokenBucketLimiter("search", opt =>
+    {
+        opt.TokenLimit = 10;
+        opt.TokensPerPeriod = 5;
+        opt.ReplenishmentPeriod = TimeSpan.FromSeconds(10);
+        opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        opt.QueueLimit = 2;
+    });
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.Headers.RetryAfter = "10";
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new ProblemDetails
+            {
+                Title = "Rate limit exceeded",
+                Detail = "Too many requests. Please retry after 10 seconds.",
+                Status = StatusCodes.Status429TooManyRequests
+            }, ct);
+    };
+});
+builder.Services.AddSingleton(Channel.CreateBounded<TranscriptRequest>(
+    new BoundedChannelOptions(100)
+    {
+        FullMode = BoundedChannelFullMode.Wait
+    }));
+    builder.Services.AddHostedService<TranscriptWorker>();
+    builder.Services.AddSignalR();
 var app = builder.Build();
+app.MapHub<TmsHub>("/Hubs/tms");
 
 // Seed test data at startup
 using (var scope = app.Services.CreateScope())
@@ -120,7 +159,7 @@ app.UseMiddleware<RequestLoggingMiddleware>();
 app.UseExceptionHandler();
 app.UseHttpsRedirection();
 app.UseRouting();
-
+app.UseRateLimiter();
 // 3. Authentication and Authorization
 app.UseAuthentication();
 app.UseAuthorization();
