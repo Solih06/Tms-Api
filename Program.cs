@@ -20,8 +20,6 @@ using Polly;
 using Polly.Retry;
 using Polly.CircuitBreaker;
 
-
-
 var builder = WebApplication.CreateBuilder(args);
 
 // Enable scope validation and build-time validation for the service provider
@@ -37,6 +35,20 @@ builder.Services.AddAuthentication().AddJwtBearer();
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
 
+// Named CORS Policy Configuration
+var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? ["http://localhost:4200"];
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("TmsClient", policy =>
+    {
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .AllowCredentials()
+              .SetPreflightMaxAge(TimeSpan.FromMinutes(10));
+    });
+});
+
 // Register Services (Single registration for each)
 builder.Services.AddScoped<ICourseService, CourseService>();
 builder.Services.AddScoped<IEnrollmentService, EnrollmentService>();
@@ -46,6 +58,7 @@ builder.Services.AddDbContext<TmsDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("TmsDatabase"))
            .LogTo(Console.WriteLine, LogLevel.Information)
            .EnableSensitiveDataLogging());
+
 builder.Services.AddApiVersioning(options =>
 {
     options.DefaultApiVersion = new ApiVersion(1, 0);
@@ -59,28 +72,22 @@ builder.Services.AddApiVersioning(options =>
     options.GroupNameFormat = "'v'VVV";
     options.SubstituteApiVersionInUrl = true;
 });
+
 builder.Services.AddMediatR(cfg =>
     cfg.RegisterServicesFromAssembly(typeof(EnrollStudentHandler).Assembly));
 builder.Services.AddValidatorsFromAssembly(typeof(EnrollStudentValidator).Assembly);
 builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
 
-
 builder.Services.AddOptions<PaymentOptions>()
     .BindConfiguration("Payments")
     .ValidateDataAnnotations()
-    .Validate(opt =>
-    {
-        // Example custom rule: GatewayUrl must start with https
-        return opt.GatewayUrl.StartsWith("https://");
-    }, "GatewayUrl must start with https")
-    .Validate(opt =>
-    {
-        // Example custom rule: MaxDepositBirr must be divisible by 100
-        return opt.MaxDepositBirr % 100 == 0;
-    }, "MaxDepositBirr must be divisible by 100")
+    .Validate(opt => opt.GatewayUrl.StartsWith("https://"), "GatewayUrl must start with https")
+    .Validate(opt => opt.MaxDepositBirr % 100 == 0, "MaxDepositBirr must be divisible by 100")
     .ValidateOnStart();
+
 builder.Services.AddHybridCache();
 builder.Services.AddScoped<ICachedCourseService, CachedCourseService>();
+
 builder.Services.AddRateLimiter(options =>
 {
     options.AddTokenBucketLimiter("search", opt =>
@@ -104,14 +111,17 @@ builder.Services.AddRateLimiter(options =>
             }, ct);
     };
 });
+
 builder.Services.AddSingleton(Channel.CreateBounded<TranscriptRequest>(
     new BoundedChannelOptions(100)
     {
         FullMode = BoundedChannelFullMode.Wait
     }));
-    builder.Services.AddHostedService<TranscriptWorker>();
-    builder.Services.AddSignalR();
-    builder.Services.AddResiliencePipeline("certificate-api", pipeline =>
+
+builder.Services.AddHostedService<TranscriptWorker>();
+builder.Services.AddSignalR();
+
+builder.Services.AddResiliencePipeline("certificate-api", pipeline =>
 {
     pipeline
         .AddRetry(new RetryStrategyOptions
@@ -145,14 +155,17 @@ builder.Services.AddSingleton(Channel.CreateBounded<TranscriptRequest>(
         })
         .AddTimeout(TimeSpan.FromSeconds(5));
 });
+
 var app = builder.Build();
-app.MapHub<TmsHub>("/Hubs/tms");
+
+// Map Hub with CORS policy
+app.MapHub<TmsHub>("/Hubs/tms").RequireCors("TmsClient");
 
 // Seed test data at startup
 using (var scope = app.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<TmsDbContext>();
-    context.Database.Migrate(); // Applies any pending migrations; keeps migration history intact
+    context.Database.Migrate();
 
     if (!context.Students.Any())
     {
@@ -188,15 +201,16 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-
 // 1. Logging Middleware (Outer wrapper)
 app.UseMiddleware<RequestLoggingMiddleware>();
 
-// 2. Error handling, HTTPS, Routing
+// 2. Error handling, HTTPS, Routing, CORS
 app.UseExceptionHandler();
 app.UseHttpsRedirection();
 app.UseRouting();
+app.UseCors("TmsClient"); // <-- CORS enabled here
 app.UseRateLimiter();
+
 // 3. Authentication and Authorization
 app.UseAuthentication();
 app.UseAuthorization();
@@ -208,7 +222,7 @@ app.MapGet("/api/assessments/results", () =>
 })
 .RequireAuthorization();
 
-// 5. Map all API controllers (CoursesController & EnrollmentsController handle their own routes)
+// 5. Map all API controllers
 app.MapControllers();
 
 app.Run();
