@@ -1,35 +1,31 @@
-using Polly;
-using Polly.Registry;
+using System.Net.Http.Json;
 
 namespace TmsApi.Infrastructure.ExternalServices;
 
-public record CertificateResult(string CertificateId, string Status);
-
 public interface ICertificateService
 {
-    Task<CertificateResult> IssueCertificateAsync(int studentId, string courseCode, CancellationToken ct);
+    Task<CertificateResult> VerifyCertificateAsync(string certificateNumber, CancellationToken cancellationToken = default);
 }
 
+public record CertificateResult(bool IsValid, string Message);
+
 public class CertificateService(
-    ResiliencePipelineProvider<string> pipelineProvider,
-    HttpClient httpClient,
-    ILogger<CertificateService> logger)
-    : ICertificateService
+    HttpClient httpClient) : ICertificateService
 {
-    public async Task<CertificateResult> IssueCertificateAsync(
-        int studentId, string courseCode, CancellationToken ct)
+    public async Task<CertificateResult> VerifyCertificateAsync(
+        string certificateNumber, 
+        CancellationToken cancellationToken = default)
     {
-        var pipeline = pipelineProvider.GetPipeline("certificate-api");
-        return await pipeline.ExecuteAsync(async token =>
+        using var response = await httpClient.GetAsync(
+            $"api/certificates/{certificateNumber}", cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
         {
-            logger.LogInformation("Requesting certificate for student {StudentId}, course {CourseCode}", studentId, courseCode);
-            var response = await httpClient.PostAsJsonAsync(
-                "/api/certificates",
-                new { StudentId = studentId, CourseCode = courseCode },
-                token);
-            response.EnsureSuccessStatusCode();
-            return await response.Content.ReadFromJsonAsync<CertificateResult>(token)
-                   ?? throw new InvalidOperationException("Empty certificate response.");
-        }, ct);
+            return new CertificateResult(false, "Certificate validation failed from external service.");
+        }
+
+        var result = await response.Content.ReadFromJsonAsync<CertificateResult>(
+            cancellationToken: cancellationToken);
+        return result ?? new CertificateResult(false, "Received empty response body.");
     }
 }

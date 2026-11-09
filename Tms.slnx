@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Tms-Api.csproj" />
+  <Project Path="Tms.Tests/Tms.Tests.csproj" />
+</Solution>

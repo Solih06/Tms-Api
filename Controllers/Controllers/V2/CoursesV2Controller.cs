@@ -1,4 +1,3 @@
-using Asp.Versioning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TmsApi.Data;
@@ -8,17 +7,13 @@ using TmsApi.Application.Utilities;
 namespace TmsApi.Controllers.V2;
 
 [ApiController]
-[Route("api/v{version:apiVersion}/courses")]
-[ApiVersion("2.0")]
-public class CoursesController(TmsDbContext context) : ControllerBase
+[Route("api/v2/courses")]
+public class CoursesV2Controller(TmsDbContext context) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetCourses(
-        [FromQuery] string? fields, 
-        CancellationToken ct)
+    public async Task<IActionResult> GetCourses([FromQuery] string? fields)
     {
         var courses = await context.Courses
-            .AsNoTracking()
             .Select(c => new CourseResponseDto(
                 c.Id,
                 c.Title,
@@ -26,9 +21,8 @@ public class CoursesController(TmsDbContext context) : ControllerBase
                 c.MaxCapacity,
                 c.Enrollments.Count
             ))
-            .ToListAsync(ct);
+            .ToListAsync(); // Must be ToListAsync() when using await
 
-        // Apply data shaping based on query parameters (e.g., ?fields=id,title)
         var shapedData = courses.ShapeData(fields);
 
         return Ok(new
@@ -40,7 +34,7 @@ public class CoursesController(TmsDbContext context) : ControllerBase
             },
             Links = new[]
             {
-                new LinkDto(Url.Action(nameof(GetCourses), new { version = "2.0", fields })!, "self", "GET"),
+                new LinkDto(Url.Action(nameof(GetCourses), new { fields })!, "self", "GET"),
                 new LinkDto("/api/v2/enrollments", "enrollments", "GET")
             }
         });
